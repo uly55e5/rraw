@@ -1,0 +1,9 @@
+[package]
+name = "rraw"
+version = "0.1.0"
+authors = ["uly55e5 <uly55e5@web.de>"]
+
+[dependencies]
+raw = { path="crates/raw" }
+metadata = { path="crates/metadata" }
+image = { path="crates/image" }

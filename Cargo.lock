@@ -1,0 +1,21 @@
+[root]
+name = "rraw"
+version = "0.1.0"
+dependencies = [
+ "image 0.1.0",
+ "metadata 0.1.0",
+ "raw 0.1.0",
+]
+
+[[package]]
+name = "image"
+version = "0.1.0"
+
+[[package]]
+name = "metadata"
+version = "0.1.0"
+
+[[package]]
+name = "raw"
+version = "0.1.0"
+
