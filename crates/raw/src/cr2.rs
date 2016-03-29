@@ -49,8 +49,8 @@ use std::error::Error;
     pub struct RawImage {
         pub file_name:  Box<String>,
         byte_order: ByteOrder,
-        pub ifd_offset: u32,
-        tiff_offset: u32
+        pub raw_offset: u32,
+        ifd_offsets: Vec<u32>
     }
 
 
@@ -59,6 +59,11 @@ pub fn open(path: String) -> Result<RawImage,RawFileError>{
     let mut f = try!(File::open(&path));
     let mut ri: RawImage = Default::default();
     try!(ri.read_header(&mut f));
+    let mut i=0;
+    while ri.ifd_offsets.len() > i {
+        try!(ri.read_ifd(&mut f,i,false));
+        i += 1;
+    }
     ri.file_name = Box::new(String::from(path));
     Ok(ri)
 }
@@ -85,7 +90,7 @@ fn read_header(&mut self,f: &mut File) -> Result<(),RawFileError> {
         
     let mut to = [ 0u8; 4];        // Tiff Offset
     to.clone_from_slice(&head[4..8]);
-    unsafe { self.tiff_offset = mem::transmute::<[u8;4],u32>(to)};
+    unsafe { self.ifd_offsets.push(mem::transmute::<[u8;4],u32>(to))};
     
     let cm = &head[8..10];         // CR2 Magic
     if try!(str::from_utf8(&cm)) != "CR" { return Err(RawFileError::FileFormat("CR2 Magic mismatch".to_string()));}
@@ -96,8 +101,25 @@ fn read_header(&mut self,f: &mut File) -> Result<(),RawFileError> {
     
     let mut io = [0u8;4];         // IFD Offset
     io.clone_from_slice(&head[12..16]);
-    unsafe { self.ifd_offset = mem::transmute::<[u8;4],u32>(io)};
+    unsafe { self.raw_offset = mem::transmute::<[u8;4],u32>(io)};
     Ok(())
+
+}
+fn read_ifd(&mut self,f: &mut File, index: usize,read_tags:bool) -> Result<u32,RawFileError>{
+    let mut pos = try!(f.seek(io::SeekFrom::Start(self.ifd_offsets[index] as u64)));
+    let mut na=[0u8; 2];
+    try!(f.read(&mut na));
+    let n = unsafe{ mem::transmute::<[u8;2],u16>(na)};
+    if read_tags {
+    }
+    pos=pos+n as u64 *12+2;
+    let mut ioa = [0u8; 4];
+    try!(f.seek(io::SeekFrom::Start(pos)));
+    try!(f.read(&mut ioa));
+    let io = unsafe{ mem::transmute::<[u8;4],u32>(ioa)};    
+    if io != 0 {self.ifd_offsets.push(io)};
+
+    Ok(io)
 
 }
 }
