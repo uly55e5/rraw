@@ -6,6 +6,7 @@ use std::fmt;
 use std::error::Error;
 use std::collections::HashMap;
 use std::any::Any;
+use std::ops::Deref;
 
     enum ByteOrder {
         Intel,
@@ -136,9 +137,35 @@ fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
     try!(f.read(&mut tag));
     let tagid = tag[0..2].to_u16().unwrap();
     let tagtype = tag[2..4].to_u16().unwrap();
-    let tagvalue = tag[4..8].to_u32().unwrap(); 
+    let valcount = tag[4..8].to_u32().unwrap() as usize; 
     let tagdata = tag[8..12].to_u32().unwrap();
-    println!("ID: {:0>4x}, type: {:2}, val: {:8x}, data: {:8x}",tagid,tagtype,tagvalue,tagdata);
+    
+    let tagname = match tagid {
+        0x103 => "compression",
+        0x111 => "strip_offset",
+        0x117 => "strip_byte_count",
+        0xc640 => "strip_cr2_slice",
+        _ => "???"
+    };
+    let valsize: usize = match tagtype {
+        1|2|6|7 => 1,
+        3|8 => 2,
+        4|9|11 => 4,
+        5|10|12 => 8,
+        _ => 0
+    };
+    println!("ID: {:0>4x}, type: {:2}, count: {:8x}, data: {:8x} {}",tagid,tagtype,valcount,tagdata,tagname);
+    if valcount > 1 || valsize > 4
+    {
+        let mut f = try!(File::open(self.file_name.deref()));
+        try!(f.seek(io::SeekFrom::Start(tagdata as u64)));
+        let mut data = vec![0u8; (valsize * valcount) as usize];
+        try!(f.read(&mut data));
+        for w in data.windows(valsize) {
+            
+        }
+    }
+    
     Ok(())
 }
 
