@@ -4,6 +4,8 @@ use std::str;
 use std::mem;
 use std::fmt;
 use std::error::Error;
+use std::collections::HashMap;
+use std::any::Any;
 
     enum ByteOrder {
         Intel,
@@ -46,29 +48,56 @@ use std::error::Error;
     }
     
     #[derive(Default)]
-    pub struct RawImage {
+    pub struct RawImage<'a> {
         pub file_name:  Box<String>,
         byte_order: ByteOrder,
         pub raw_offset: u32,
-        ifd_offsets: Vec<u32>
+        ifd_offsets: Vec<u32>,
+        tags: HashMap<String,&'a Any>
     }
 
 
-pub fn open(path: String) -> Result<RawImage,RawFileError>{
+pub fn open<'a>(path: String) -> Result<RawImage<'a>,RawFileError>{
 
     let mut f = try!(File::open(&path));
     let mut ri: RawImage = Default::default();
     try!(ri.read_header(&mut f));
     let mut i=0;
     while ri.ifd_offsets.len() > i {
-        try!(ri.read_ifd(&mut f,i,false));
+        try!(ri.read_ifd(&mut f,i,true));
         i += 1;
     }
     ri.file_name = Box::new(String::from(path));
     Ok(ri)
 }
 
-impl RawImage {
+trait IntConversion {
+    fn to_u16(&self) -> Option<u16>;
+    fn to_u32(&self) -> Option<u32>;
+}
+
+impl IntConversion for [u8] {
+    fn to_u16(&self) -> Option<u16> {
+        if self.len() == 2 {
+            let mut val = [0u8;2];
+            val.clone_from_slice(self);
+            return Some(unsafe{ mem::transmute::<[u8;2],u16>(val)});
+        }
+        None
+    }
+
+    fn to_u32(&self) -> Option<u32> {
+        if self.len() == 4 {
+            let mut val = [0u8;4];
+            val.clone_from_slice(self);
+            return Some(unsafe{ mem::transmute::<[u8;4],u32>(val)});
+        }
+        None
+    }
+}
+
+
+impl<'a> RawImage<'a> {
 fn read_header(&mut self,f: &mut File) -> Result<(),RawFileError> {
     
     if 0 != try!(f.seek(::std::io::SeekFrom::Start(0))) { return Err(RawFileError::Seek(0)) } ;
@@ -84,13 +113,11 @@ fn read_header(&mut self,f: &mut File) -> Result<(),RawFileError> {
     }
     if s != "II" { return Err(RawFileError::NotImplemented("Only Intel Byte Order supported!".to_string())) };
     
-    let mut tm = [0u8; 2];
-    tm.clone_from_slice(&head[2..4]);         // Tiff Magic
-    if unsafe{ mem::transmute::<[u8;2],u16>(tm)} != 0x002a { return Err(RawFileError::FileFormat("Tiff Magic mismatch".to_string()))};
+    if head[2..4].to_u16().unwrap() != 0x002a { return Err(RawFileError::FileFormat("Tiff Magic mismatch".to_string()))};
         
     let mut to = [ 0u8; 4];        // Tiff Offset
     to.clone_from_slice(&head[4..8]);
-    unsafe { self.ifd_offsets.push(mem::transmute::<[u8;4],u32>(to))};
+    self.ifd_offsets.push(head[4..8].to_u32().unwrap());
     
     let cm = &head[8..10];         // CR2 Magic
     if try!(str::from_utf8(&cm)) != "CR" { return Err(RawFileError::FileFormat("CR2 Magic mismatch".to_string()));}
@@ -99,28 +126,42 @@ fn read_header(&mut self,f: &mut File) -> Result<(),RawFileError> {
     let cmin = &head[11..12];        // CR2 Minor
     if cmaj[0]!=2 && cmin[0]!=0 { return Err(RawFileError::NotImplemented(format!("CR2 Version {}.{} not supported",cmaj[0],cmin[0])));}
     
-    let mut io = [0u8;4];         // IFD Offset
-    io.clone_from_slice(&head[12..16]);
-    unsafe { self.raw_offset = mem::transmute::<[u8;4],u32>(io)};
+    self.raw_offset = head[12..16].to_u32().unwrap();
     Ok(())
 
 }
+
+fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
+    let mut tag = [0u8; 12];
+    try!(f.read(&mut tag));
+    let tagid = tag[0..2].to_u16().unwrap();
+    let tagtype = tag[2..4].to_u16().unwrap();
+    let tagvalue = tag[4..8].to_u32().unwrap(); 
+    let tagdata = tag[8..12].to_u32().unwrap();
+    println!("ID: {:0>4x}, type: {:2}, val: {:8x}, data: {:8x}",tagid,tagtype,tagvalue,tagdata);
+    Ok(())
+}
+
 fn read_ifd(&mut self,f: &mut File, index: usize,read_tags:bool) -> Result<u32,RawFileError>{
     let mut pos = try!(f.seek(io::SeekFrom::Start(self.ifd_offsets[index] as u64)));
     let mut na=[0u8; 2];
     try!(f.read(&mut na));
-    let n = unsafe{ mem::transmute::<[u8;2],u16>(na)};
+    let n = na.to_u16().unwrap();
     if read_tags {
+        for n in 0..n {
+            self.read_tag(f);
+        }
     }
     pos=pos+n as u64 *12+2;
     let mut ioa = [0u8; 4];
     try!(f.seek(io::SeekFrom::Start(pos)));
     try!(f.read(&mut ioa));
-    let io = unsafe{ mem::transmute::<[u8;4],u32>(ioa)};    
+    let io = ioa.to_u32().unwrap();
     if io != 0 {self.ifd_offsets.push(io)};
-
     Ok(io)
 
 }
+
 }
+
 
