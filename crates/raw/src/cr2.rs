@@ -305,3 +305,17 @@ fn read_ifd(&mut self,f: &mut File, index: usize,read_tags:bool) -> Result<u32,R
 }
 
 
+#[test]
+fn test_u8_array_to_int() {
+    let a = [2u8; 10];
+    assert_eq!(0x02,a[0..1].to_u8().unwrap());
+    assert_eq!(0x0202,a[0..2].to_u16().unwrap());
+    assert_eq!(0x02020202,a[0..4].to_u32().unwrap());
+    assert_eq!(0x0202020202020202,a[0..8].to_u64().unwrap());
+    assert_eq!(0x02,a[0..1].to_i8().unwrap());
+    assert_eq!(0x0202,a[0..2].to_i16().unwrap());
+    assert_eq!(0x02020202,a[0..4].to_i32().unwrap());
+    assert_eq!(0x0202020202020202,a[0..8].to_i64().unwrap());
+
+}
+
