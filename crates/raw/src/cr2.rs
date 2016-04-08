@@ -52,8 +52,11 @@ use std::ops::Deref;
 
     enum TagData {
         Unsigned(u32),
-        Signed(u32),
-        Strg(String)
+        Signed(i32),
+        U64(u64),
+        I64(i64),
+        Strg(String),
+        Float(f64)
     }
 
     #[derive(Default)]
@@ -80,10 +83,43 @@ pub fn open<'a>(path: String) -> Result<RawImage<'a>,RawFileError>{
     Ok(ri)
 }
 
+trait FloatConversion {
+    fn to_f32(&self) -> Option<f32>;
+    fn to_f64(&self) -> Option<f64>;
+}
+
+impl FloatConversion for [u8] {
+    fn to_f32(&self) -> Option<f32> {
+        if self.len() == 4 {
+            let mut val = [0u8;4];
+            val.clone_from_slice(self);
+            return Some(unsafe{ mem::transmute::<[u8;4],f32>(val)});
+        }
+        None
+    }
+
+    fn to_f64(&self) -> Option<f64> {
+        if self.len() == 8 {
+            let mut val = [0u8;8];
+            val.clone_from_slice(self);
+            return Some(unsafe{ mem::transmute::<[u8;8],f64>(val)});
+        }
+        None
+    }
+
+
+}
+
 trait IntConversion {
     fn to_u8(&self) -> Option<u8>;
     fn to_u16(&self) -> Option<u16>;
     fn to_u32(&self) -> Option<u32>;
+    fn to_i8(&self) -> Option<i8>;
+    fn to_i16(&self) -> Option<i16>;
+    fn to_i32(&self) -> Option<i32>;
+    fn to_u64(&self) -> Option<u64>;
+    fn to_i64(&self) -> Option<i64>;
+ 
 }
 
 impl IntConversion for [u8] {
@@ -110,6 +146,52 @@ impl IntConversion for [u8] {
         }
         None
     }
+
+    fn to_i8(&self) -> Option<i8> {
+        if self.len() == 1 {
+            let mut val = [0u8;1];
+            val.clone_from_slice(self);
+            return Some(unsafe{ mem::transmute::<[u8;1],i8>(val)});
+        }
+        None
+    }
+
+    fn to_i16(&self) -> Option<i16> {
+        if self.len() == 2 {
+            let mut val = [0u8;2];
+            val.clone_from_slice(self);
+            return Some(unsafe{ mem::transmute::<[u8;2],i16>(val)});
+        }
+        None
+    }
+
+    fn to_i32(&self) -> Option<i32> {
+        if self.len() == 4 {
+            let mut val = [0u8;4];
+            val.clone_from_slice(self);
+            return Some(unsafe{ mem::transmute::<[u8;4],i32>(val)});
+        }
+        None
+    }
+
+    fn to_u64(&self) -> Option<u64> {
+        if self.len() == 8 {
+            let mut val = [0u8;8];
+            val.clone_from_slice(self);
+            return Some(unsafe{ mem::transmute::<[u8;8],u64>(val)});
+        }
+        None
+    }
+
+    fn to_i64(&self) -> Option<i64> {
+        if self.len() == 8 {
+            let mut val = [0u8;8];
+            val.clone_from_slice(self);
+            return Some(unsafe{ mem::transmute::<[u8;8],i64>(val)});
+        }
+        None
+    }
+
 }
 
 
@@ -178,11 +260,20 @@ fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
         try!(f.read(&mut data));
     }
         let mut d : Vec<TagData> = Vec::new();
+        let mut s:  String = String::new(); 
         for w in data.windows(valsize) {
             match tagtype {
-                1 => d.push(TagData::Unsigned(w.to_u8().unwrap() as u32)),
+                1|7 => d.push(TagData::Unsigned(w.to_u8().unwrap() as u32)),
+                2 => s.push(w.to_u8().unwrap() as char),
                 3 => d.push(TagData::Unsigned(w.to_u16().unwrap() as u32)),
                 4 => d.push(TagData::Unsigned(w.to_u32().unwrap())),
+                5 => d.push(TagData::U64(w.to_u64().unwrap())),
+                6 => d.push(TagData::Signed(w.to_i8().unwrap() as i32)),
+                8 => d.push(TagData::Signed(w.to_i16().unwrap() as i32)),
+                9 => d.push(TagData::Signed(w.to_i32().unwrap())),
+                10 => d.push(TagData::I64(w.to_i64().unwrap())),
+                11 => d.push(TagData::Float(w.to_f32().unwrap() as f64)),
+                12 => d.push(TagData::Float(w.to_f64().unwrap())),
                 _ => return Err(RawFileError::TypeError(tagtype))
 
             }    
