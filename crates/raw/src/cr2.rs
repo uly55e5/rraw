@@ -22,7 +22,8 @@ use std::ops::Deref;
         Utf8(str::Utf8Error),
         FileFormat(String),
         Seek(u64),
-        NotImplemented(String)
+        NotImplemented(String),
+        TypeError(u16)
     }
 
     impl fmt::Display for RawFileError {
@@ -33,6 +34,7 @@ use std::ops::Deref;
             RawFileError::FileFormat(ref s) => {write!(f,"File format error: {}",s)},
             RawFileError::Seek(p) => {write!(f,"Seek error: {}",p)},
             RawFileError::NotImplemented(ref s) => {write!(f,"Feature not Implemented: {}",s)}
+            RawFileError::TypeError(u) => {write!(f,"Unknown Type: {}",u)}
         }} 
     }
 
@@ -47,7 +49,13 @@ use std::ops::Deref;
             RawFileError::Utf8(e)
         }
     }
-    
+
+    enum TagData {
+        Unsigned(u32),
+        Signed(u32),
+        Strg(String)
+    }
+
     #[derive(Default)]
     pub struct RawImage<'a> {
         pub file_name:  Box<String>,
@@ -73,11 +81,18 @@ pub fn open<'a>(path: String) -> Result<RawImage<'a>,RawFileError>{
 }
 
 trait IntConversion {
+    fn to_u8(&self) -> Option<u8>;
     fn to_u16(&self) -> Option<u16>;
     fn to_u32(&self) -> Option<u32>;
 }
 
 impl IntConversion for [u8] {
+    fn to_u8(&self) -> Option<u8> {
+        if self.len() == 1 {
+            return Some(self[0]);
+        }
+        None
+    }
     fn to_u16(&self) -> Option<u16> {
         if self.len() == 2 {
             let mut val = [0u8;2];
@@ -138,8 +153,7 @@ fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
     let tagid = tag[0..2].to_u16().unwrap();
     let tagtype = tag[2..4].to_u16().unwrap();
     let valcount = tag[4..8].to_u32().unwrap() as usize; 
-    let tagdata = tag[8..12].to_u32().unwrap();
-    
+    let mut data: Vec<u8> = From::from(&tag[8..12]);
     let tagname = match tagid {
         0x103 => "compression",
         0x111 => "strip_offset",
@@ -154,17 +168,25 @@ fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
         5|10|12 => 8,
         _ => 0
     };
-    println!("ID: {:0>4x}, type: {:2}, count: {:8x}, data: {:8x} {}",tagid,tagtype,valcount,tagdata,tagname);
-    if valcount > 1 || valsize > 4
+    //println!("ID: {:0>4x}, type: {:2}, count: {:8x}, data: {:8x} {}",tagid,tagtype,valcount,tagdata,tagname);
+    if valsize*valcount > 4
     {
+        let offset = tag[8..12].to_u32().unwrap();
         let mut f = try!(File::open(self.file_name.deref()));
-        try!(f.seek(io::SeekFrom::Start(tagdata as u64)));
-        let mut data = vec![0u8; (valsize * valcount) as usize];
+        try!(f.seek(io::SeekFrom::Start(offset as u64)));
+        data = vec![0u8; (valsize * valcount) as usize];
         try!(f.read(&mut data));
-        for w in data.windows(valsize) {
-            
-        }
     }
+        let mut d : Vec<TagData> = Vec::new();
+        for w in data.windows(valsize) {
+            match tagtype {
+                1 => d.push(TagData::Unsigned(w.to_u8().unwrap() as u32)),
+                3 => d.push(TagData::Unsigned(w.to_u16().unwrap() as u32)),
+                4 => d.push(TagData::Unsigned(w.to_u32().unwrap())),
+                _ => return Err(RawFileError::TypeError(tagtype))
+
+            }    
+        }
     
     Ok(())
 }
