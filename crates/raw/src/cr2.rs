@@ -83,111 +83,17 @@ pub fn open<'a>(path: String) -> Result<RawImage<'a>,RawFileError>{
     Ok(ri)
 }
 
-trait FloatConversion {
-    fn to_f32(&self) -> Option<f32>;
-    fn to_f64(&self) -> Option<f64>;
+trait Conversion {
+    fn to<T:Copy>(&self) -> Option<T>;
 }
 
-impl FloatConversion for [u8] {
-    fn to_f32(&self) -> Option<f32> {
-        if self.len() == 4 {
-            let mut val = [0u8;4];
-            val.clone_from_slice(self);
-            return Some(unsafe{ mem::transmute::<[u8;4],f32>(val)});
-        }
-        None
-    }
-
-    fn to_f64(&self) -> Option<f64> {
-        if self.len() == 8 {
-            let mut val = [0u8;8];
-            val.clone_from_slice(self);
-            return Some(unsafe{ mem::transmute::<[u8;8],f64>(val)});
-        }
-        None
-    }
-
-
-}
-
-trait IntConversion {
-    fn to_u8(&self) -> Option<u8>;
-    fn to_u16(&self) -> Option<u16>;
-    fn to_u32(&self) -> Option<u32>;
-    fn to_i8(&self) -> Option<i8>;
-    fn to_i16(&self) -> Option<i16>;
-    fn to_i32(&self) -> Option<i32>;
-    fn to_u64(&self) -> Option<u64>;
-    fn to_i64(&self) -> Option<i64>;
- 
-}
-
-impl IntConversion for [u8] {
-    fn to_u8(&self) -> Option<u8> {
-        if self.len() == 1 {
-            return Some(self[0]);
-        }
-        None
-    }
-    fn to_u16(&self) -> Option<u16> {
-        if self.len() == 2 {
-            let mut val = [0u8;2];
-            val.clone_from_slice(self);
-            return Some(unsafe{ mem::transmute::<[u8;2],u16>(val)});
-        }
-        None
-    }
-
-    fn to_u32(&self) -> Option<u32> {
-        if self.len() == 4 {
-            let mut val = [0u8;4];
-            val.clone_from_slice(self);
-            return Some(unsafe{ mem::transmute::<[u8;4],u32>(val)});
-        }
-        None
-    }
-
-    fn to_i8(&self) -> Option<i8> {
-        if self.len() == 1 {
-            let mut val = [0u8;1];
-            val.clone_from_slice(self);
-            return Some(unsafe{ mem::transmute::<[u8;1],i8>(val)});
-        }
-        None
-    }
-
-    fn to_i16(&self) -> Option<i16> {
-        if self.len() == 2 {
-            let mut val = [0u8;2];
-            val.clone_from_slice(self);
-            return Some(unsafe{ mem::transmute::<[u8;2],i16>(val)});
-        }
-        None
-    }
-
-    fn to_i32(&self) -> Option<i32> {
-        if self.len() == 4 {
-            let mut val = [0u8;4];
-            val.clone_from_slice(self);
-            return Some(unsafe{ mem::transmute::<[u8;4],i32>(val)});
-        }
-        None
-    }
-
-    fn to_u64(&self) -> Option<u64> {
-        if self.len() == 8 {
-            let mut val = [0u8;8];
-            val.clone_from_slice(self);
-            return Some(unsafe{ mem::transmute::<[u8;8],u64>(val)});
-        }
-        None
-    }
-
-    fn to_i64(&self) -> Option<i64> {
-        if self.len() == 8 {
-            let mut val = [0u8;8];
-            val.clone_from_slice(self);
-            return Some(unsafe{ mem::transmute::<[u8;8],i64>(val)});
+impl Conversion for [u8] {
+    fn to<T: Copy>(&self) -> Option<T> {
+        let tlen: usize = mem::size_of::<T>();
+        if self.len() == tlen
+        {
+            let val = self.as_ptr()  as *const T;;
+            return Some(unsafe{(*val)});
         }
         None
     }
@@ -211,11 +117,11 @@ fn read_header(&mut self,f: &mut File) -> Result<(),RawFileError> {
     }
     if s != "II" { return Err(RawFileError::NotImplemented("Only Intel Byte Order supported!".to_string())) };
     
-    if head[2..4].to_u16().unwrap() != 0x002a { return Err(RawFileError::FileFormat("Tiff Magic mismatch".to_string()))};
+    if head[2..4].to::<u16>().unwrap() != 0x002a { return Err(RawFileError::FileFormat("Tiff Magic mismatch".to_string()))};
         
     let mut to = [ 0u8; 4];        // Tiff Offset
     to.clone_from_slice(&head[4..8]);
-    self.ifd_offsets.push(head[4..8].to_u32().unwrap());
+    self.ifd_offsets.push(head[4..8].to::<u32>().unwrap());
     
     let cm = &head[8..10];         // CR2 Magic
     if try!(str::from_utf8(&cm)) != "CR" { return Err(RawFileError::FileFormat("CR2 Magic mismatch".to_string()));}
@@ -224,7 +130,7 @@ fn read_header(&mut self,f: &mut File) -> Result<(),RawFileError> {
     let cmin = &head[11..12];        // CR2 Minor
     if cmaj[0]!=2 && cmin[0]!=0 { return Err(RawFileError::NotImplemented(format!("CR2 Version {}.{} not supported",cmaj[0],cmin[0])));}
     
-    self.raw_offset = head[12..16].to_u32().unwrap();
+    self.raw_offset = head[12..16].to::<u32>().unwrap();
     Ok(())
 
 }
@@ -232,9 +138,9 @@ fn read_header(&mut self,f: &mut File) -> Result<(),RawFileError> {
 fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
     let mut tag = [0u8; 12];
     try!(f.read(&mut tag));
-    let tagid = tag[0..2].to_u16().unwrap();
-    let tagtype = tag[2..4].to_u16().unwrap();
-    let valcount = tag[4..8].to_u32().unwrap() as usize; 
+    let tagid = tag[0..2].to::<u16>().unwrap();
+    let tagtype = tag[2..4].to::<u16>().unwrap();
+    let valcount = tag[4..8].to::<u32>().unwrap() as usize; 
     let mut data: Vec<u8> = From::from(&tag[8..12]);
     let tagname = match tagid {
         0x103 => "compression",
@@ -253,7 +159,7 @@ fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
     //println!("ID: {:0>4x}, type: {:2}, count: {:8x}, data: {:8x} {}",tagid,tagtype,valcount,tagdata,tagname);
     if valsize*valcount > 4
     {
-        let offset = tag[8..12].to_u32().unwrap();
+        let offset = tag[8..12].to::<u32>().unwrap();
         let mut f = try!(File::open(self.file_name.deref()));
         try!(f.seek(io::SeekFrom::Start(offset as u64)));
         data = vec![0u8; (valsize * valcount) as usize];
@@ -263,17 +169,17 @@ fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
         let mut s:  String = String::new(); 
         for w in data.windows(valsize) {
             match tagtype {
-                1|7 => d.push(TagData::Unsigned(w.to_u8().unwrap() as u32)),
-                2 => s.push(w.to_u8().unwrap() as char),
-                3 => d.push(TagData::Unsigned(w.to_u16().unwrap() as u32)),
-                4 => d.push(TagData::Unsigned(w.to_u32().unwrap())),
-                5 => d.push(TagData::U64(w.to_u64().unwrap())),
-                6 => d.push(TagData::Signed(w.to_i8().unwrap() as i32)),
-                8 => d.push(TagData::Signed(w.to_i16().unwrap() as i32)),
-                9 => d.push(TagData::Signed(w.to_i32().unwrap())),
-                10 => d.push(TagData::I64(w.to_i64().unwrap())),
-                11 => d.push(TagData::Float(w.to_f32().unwrap() as f64)),
-                12 => d.push(TagData::Float(w.to_f64().unwrap())),
+                1|7 => d.push(TagData::Unsigned(w.to::<u8>().unwrap() as u32)),
+                2 => s.push(w.to::<u8>().unwrap() as char),
+                3 => d.push(TagData::Unsigned(w.to::<u16>().unwrap() as u32)),
+                4 => d.push(TagData::Unsigned(w.to::<u32>().unwrap())),
+                5 => d.push(TagData::U64(w.to::<u64>().unwrap())),
+                6 => d.push(TagData::Signed(w.to::<i8>().unwrap() as i32)),
+                8 => d.push(TagData::Signed(w.to::<i16>().unwrap() as i32)),
+                9 => d.push(TagData::Signed(w.to::<i32>().unwrap())),
+                10 => d.push(TagData::I64(w.to::<i64>().unwrap())),
+                11 => d.push(TagData::Float(w.to::<f32>().unwrap() as f64)),
+                12 => d.push(TagData::Float(w.to::<f64>().unwrap())),
                 _ => return Err(RawFileError::TypeError(tagtype))
 
             }    
@@ -286,7 +192,7 @@ fn read_ifd(&mut self,f: &mut File, index: usize,read_tags:bool) -> Result<u32,R
     let mut pos = try!(f.seek(io::SeekFrom::Start(self.ifd_offsets[index] as u64)));
     let mut na=[0u8; 2];
     try!(f.read(&mut na));
-    let n = na.to_u16().unwrap();
+    let n = na.to::<u16>().unwrap();
     if read_tags {
         for n in 0..n {
             self.read_tag(f);
@@ -296,7 +202,7 @@ fn read_ifd(&mut self,f: &mut File, index: usize,read_tags:bool) -> Result<u32,R
     let mut ioa = [0u8; 4];
     try!(f.seek(io::SeekFrom::Start(pos)));
     try!(f.read(&mut ioa));
-    let io = ioa.to_u32().unwrap();
+    let io = ioa.to::<u32>().unwrap();
     if io != 0 {self.ifd_offsets.push(io)};
     Ok(io)
 
@@ -308,14 +214,14 @@ fn read_ifd(&mut self,f: &mut File, index: usize,read_tags:bool) -> Result<u32,R
 #[test]
 fn test_u8_array_to_int() {
     let a = [2u8; 10];
-    assert_eq!(0x02,a[0..1].to_u8().unwrap());
-    assert_eq!(0x0202,a[0..2].to_u16().unwrap());
-    assert_eq!(0x02020202,a[0..4].to_u32().unwrap());
-    assert_eq!(0x0202020202020202,a[0..8].to_u64().unwrap());
-    assert_eq!(0x02,a[0..1].to_i8().unwrap());
-    assert_eq!(0x0202,a[0..2].to_i16().unwrap());
-    assert_eq!(0x02020202,a[0..4].to_i32().unwrap());
-    assert_eq!(0x0202020202020202,a[0..8].to_i64().unwrap());
 
+    assert_eq!(0x02,a[0..1].to::<u8>().unwrap());
+    assert_eq!(0x0202,a[0..2].to::<u16>().unwrap());
+    assert_eq!(0x02020202,a[0..4].to::<u32>().unwrap());
+    assert_eq!(0x0202020202020202,a[0..8].to::<u64>().unwrap());
+    assert_eq!(0x02,a[0..1].to::<i8>().unwrap());
+    assert_eq!(0x0202,a[0..2].to::<i16>().unwrap());
+    assert_eq!(0x02020202,a[0..4].to::<i32>().unwrap());
+    assert_eq!(0x0202020202020202,a[0..8].to::<i64>().unwrap());
 }
 
