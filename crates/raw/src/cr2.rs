@@ -50,6 +50,7 @@ use std::ops::Deref;
         }
     }
 
+    #[derive(Debug)]
     enum TagData {
         Unsigned(u32),
         Signed(i32),
@@ -59,35 +60,42 @@ use std::ops::Deref;
         Float(f64)
     }
 
+    struct Ifd {
+        offset: usize,
+        tags: HashMap<String, Vec<TagData>>
+            
+    
+    }
+
     #[derive(Default)]
-    pub struct RawImage<'a> {
+    pub struct RawImage {
         pub file_name:  Box<String>,
         byte_order: ByteOrder,
-        pub raw_offset: u32,
-        ifd_offsets: Vec<u32>,
-        tags: HashMap<String,&'a Any>
+        pub raw_offset: usize,
+        ifd: Vec<Ifd>,
+        tags: HashMap<String,Vec<TagData> >
     }
 
 
-pub fn open<'a>(path: String) -> Result<RawImage<'a>,RawFileError>{
+pub fn open(path: String) -> Result<RawImage,RawFileError>{
 
-    let mut f = try!(File::open(&path));
-    let mut ri: RawImage = Default::default();
-    try!(ri.read_header(&mut f));
+    let mut file = try!(File::open(&path));
+    let mut image: RawImage = Default::default();
+    image.file_name = Box::new(String::from(path));
+    try!(image.read_header(&mut file));
     let mut i=0;
-    while ri.ifd_offsets.len() > i {
-        try!(ri.read_ifd(&mut f,i,true));
+    while image.ifd.len() > i {
+        try!(image.read_ifd(&mut file,i,true));
         i += 1;
     }
-    ri.file_name = Box::new(String::from(path));
-    Ok(ri)
+    Ok(image)
 }
 
-trait Conversion {
+trait Transmute {
     fn to<T:Copy>(&self) -> Option<T>;
 }
 
-impl Conversion for [u8] {
+impl Transmute for [u8] {
     fn to<T: Copy>(&self) -> Option<T> {
         let tlen: usize = mem::size_of::<T>();
         if self.len() == tlen
@@ -97,11 +105,10 @@ impl Conversion for [u8] {
         }
         None
     }
-
 }
 
 
-impl<'a> RawImage<'a> {
+impl<'a> RawImage {
 fn read_header(&mut self,f: &mut File) -> Result<(),RawFileError> {
     
     if 0 != try!(f.seek(::std::io::SeekFrom::Start(0))) { return Err(RawFileError::Seek(0)) } ;
@@ -121,7 +128,7 @@ fn read_header(&mut self,f: &mut File) -> Result<(),RawFileError> {
         
     let mut to = [ 0u8; 4];        // Tiff Offset
     to.clone_from_slice(&head[4..8]);
-    self.ifd_offsets.push(head[4..8].to::<u32>().unwrap());
+    self.ifd.push(Ifd{offset: head[4..8].to::<u32>().unwrap() as usize,tags: HashMap::new()});
     
     let cm = &head[8..10];         // CR2 Magic
     if try!(str::from_utf8(&cm)) != "CR" { return Err(RawFileError::FileFormat("CR2 Magic mismatch".to_string()));}
@@ -130,7 +137,7 @@ fn read_header(&mut self,f: &mut File) -> Result<(),RawFileError> {
     let cmin = &head[11..12];        // CR2 Minor
     if cmaj[0]!=2 && cmin[0]!=0 { return Err(RawFileError::NotImplemented(format!("CR2 Version {}.{} not supported",cmaj[0],cmin[0])));}
     
-    self.raw_offset = head[12..16].to::<u32>().unwrap();
+    self.raw_offset = head[12..16].to::<u32>().unwrap() as usize;
     Ok(())
 
 }
@@ -156,9 +163,8 @@ fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
         5|10|12 => 8,
         _ => 0
     };
-    //println!("ID: {:0>4x}, type: {:2}, count: {:8x}, data: {:8x} {}",tagid,tagtype,valcount,tagdata,tagname);
     if valsize*valcount > 4
-    {
+    {   
         let offset = tag[8..12].to::<u32>().unwrap();
         let mut f = try!(File::open(self.file_name.deref()));
         try!(f.seek(io::SeekFrom::Start(offset as u64)));
@@ -167,7 +173,12 @@ fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
     }
         let mut d : Vec<TagData> = Vec::new();
         let mut s:  String = String::new(); 
-        for w in data.windows(valsize) {
+        let mut i = 0;
+        for w in data.chunks(valsize) {
+            i =  i+1;;
+            if i > valcount { 
+                break; 
+            }
             match tagtype {
                 1|7 => d.push(TagData::Unsigned(w.to::<u8>().unwrap() as u32)),
                 2 => s.push(w.to::<u8>().unwrap() as char),
@@ -183,33 +194,34 @@ fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
                 _ => return Err(RawFileError::TypeError(tagtype))
 
             }    
+        
         }
-    
     Ok(())
 }
 
-fn read_ifd(&mut self,f: &mut File, index: usize,read_tags:bool) -> Result<u32,RawFileError>{
-    let mut pos = try!(f.seek(io::SeekFrom::Start(self.ifd_offsets[index] as u64)));
+fn read_ifd(&mut self,f: &mut File, index: usize,read_tags:bool) -> Result<usize,RawFileError>{
+    let mut pos = try!(f.seek(io::SeekFrom::Start(self.ifd[index].offset as u64)));
     let mut na=[0u8; 2];
     try!(f.read(&mut na));
     let n = na.to::<u16>().unwrap();
     if read_tags {
         for n in 0..n {
-            self.read_tag(f);
+            let r = self.read_tag(f);
         }
     }
     pos=pos+n as u64 *12+2;
     let mut ioa = [0u8; 4];
     try!(f.seek(io::SeekFrom::Start(pos)));
     try!(f.read(&mut ioa));
-    let io = ioa.to::<u32>().unwrap();
-    if io != 0 {self.ifd_offsets.push(io)};
+    let io = ioa.to::<u32>().unwrap() as usize;
+    if io != 0 {
+        self.ifd.push(Ifd{offset: io,tags: HashMap::new()})
+    }
     Ok(io)
 
 }
 
 }
-
 
 #[test]
 fn test_u8_array_to_int() {
