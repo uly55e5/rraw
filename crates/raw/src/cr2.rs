@@ -8,35 +8,43 @@ use std::collections::HashMap;
 use std::any::Any;
 use std::ops::Deref;
 
-    enum ByteOrder {
-        Intel,
-        Motorola
-    }
+/// Byte order of the containing data
+enum ByteOrder {
+    /// little endian
+    Intel,
+    /// big endian
+    Motorola
+}
 
-    impl Default for ByteOrder{
-        fn default() -> ByteOrder { ByteOrder::Intel }
-    }
-    
-    pub enum RawFileError {
-        Io(io::Error),
-        Utf8(str::Utf8Error),
-        FileFormat(String),
-        Seek(u64),
-        NotImplemented(String),
-        TypeError(u16)
-    }
+/// Sets the default byte order to little endian
+/// TODO big endian is not implemented yet
+impl Default for ByteOrder{
+    fn default() -> ByteOrder { ByteOrder::Intel }
+}
 
-    impl fmt::Display for RawFileError {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
+/// Error types for the raw file reader
+pub enum RawFileError {
+    Io(io::Error),
+    Utf8(str::Utf8Error),
+    FileFormat(String),
+    Seek(u64),
+    NotImplemented(String),
+    TypeError(u16)
+}
+
+/// Display error messages
+impl fmt::Display for RawFileError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+         match *self {
             RawFileError::Io(ref e) => {write!(f,"IO error: {}",e.description())},
             RawFileError::Utf8(ref e) => {write!(f,"Utf8 conversion error: {}",e.description())},
             RawFileError::FileFormat(ref s) => {write!(f,"File format error: {}",s)},
             RawFileError::Seek(p) => {write!(f,"Seek error: {}",p)},
             RawFileError::NotImplemented(ref s) => {write!(f,"Feature not Implemented: {}",s)}
             RawFileError::TypeError(u) => {write!(f,"Unknown Type: {}",u)}
-        }} 
-    }
+        }
+    } 
+}
 
     impl From<io::Error> for RawFileError {
         fn from(e: io::Error) -> RawFileError {
@@ -109,68 +117,87 @@ impl Transmute for [u8] {
 
 
 impl<'a> RawImage {
-fn read_header(&mut self,f: &mut File) -> Result<(),RawFileError> {
+    fn read_header(&mut self,f: &mut File) -> Result<(),RawFileError> {
+        if 0 != try!(f.seek(::std::io::SeekFrom::Start(0))) { 
+            return Err(RawFileError::Seek(0)) 
+        } ;
+        let mut head = [0u8; 16];
+        try!(f.read(&mut head));
     
-    if 0 != try!(f.seek(::std::io::SeekFrom::Start(0))) { return Err(RawFileError::Seek(0)) } ;
-    let mut head = [0u8; 16];
-    try!(f.read(&mut head));
+        let bo = &head[0..2]; // Byte order
+        let s = try!(str::from_utf8(&bo));
+        match s {
+            "II" => self.byte_order = ByteOrder::Intel,
+            "MM" => self.byte_order = ByteOrder::Motorola,
+            _    => return Err(RawFileError::FileFormat("Unknown byte order ".to_string()+s)) 
+        }
+        if s != "II" { 
+            return Err(RawFileError::NotImplemented("Only Intel Byte Order supported!".to_string())) 
+        };
     
-    let bo = &head[0..2]; // Byte order
-    let s = try!(str::from_utf8(&bo));
-    match s {
-        "II" => self.byte_order = ByteOrder::Intel,
-        "MM" => self.byte_order = ByteOrder::Motorola,
-        _    => return Err(RawFileError::FileFormat("Unknown byte order ".to_string()+s)) 
-    }
-    if s != "II" { return Err(RawFileError::NotImplemented("Only Intel Byte Order supported!".to_string())) };
-    
-    if head[2..4].to::<u16>().unwrap() != 0x002a { return Err(RawFileError::FileFormat("Tiff Magic mismatch".to_string()))};
+        if head[2..4].to::<u16>().unwrap() != 0x002a { 
+            return Err(RawFileError::FileFormat("Tiff Magic mismatch".to_string()))
+        };
         
-    let mut to = [ 0u8; 4];        // Tiff Offset
-    to.clone_from_slice(&head[4..8]);
-    self.ifd.push(Ifd{offset: head[4..8].to::<u32>().unwrap() as usize,tags: HashMap::new()});
+        let mut to = [ 0u8; 4];        // Tiff Offset
+        to.clone_from_slice(&head[4..8]);
+        self.ifd.push(Ifd{offset: head[4..8].to::<u32>().unwrap() as usize,tags: HashMap::new()});
     
-    let cm = &head[8..10];         // CR2 Magic
-    if try!(str::from_utf8(&cm)) != "CR" { return Err(RawFileError::FileFormat("CR2 Magic mismatch".to_string()));}
+        let cm = &head[8..10];         // CR2 Magic
+        if try!(str::from_utf8(&cm)) != "CR" { 
+            return Err(RawFileError::FileFormat("CR2 Magic mismatch".to_string()));
+        }
     
-    let cmaj = &head[10..11];        // CR2 Major
-    let cmin = &head[11..12];        // CR2 Minor
-    if cmaj[0]!=2 && cmin[0]!=0 { return Err(RawFileError::NotImplemented(format!("CR2 Version {}.{} not supported",cmaj[0],cmin[0])));}
+        let cmaj = &head[10..11];        // CR2 Major
+        let cmin = &head[11..12];        // CR2 Minor
+        if cmaj[0]!=2 && cmin[0]!=0 {
+            return Err(RawFileError::NotImplemented(format!(
+                        "CR2 Version {}.{} not supported",cmaj[0],cmin[0])));
+        }
     
-    self.raw_offset = head[12..16].to::<u32>().unwrap() as usize;
-    Ok(())
-
-}
-
-fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
-    let mut tag = [0u8; 12];
-    try!(f.read(&mut tag));
-    let tagid = tag[0..2].to::<u16>().unwrap();
-    let tagtype = tag[2..4].to::<u16>().unwrap();
-    let valcount = tag[4..8].to::<u32>().unwrap() as usize; 
-    let mut data: Vec<u8> = From::from(&tag[8..12]);
-    let tagname = match tagid {
-        0x103 => "compression",
-        0x111 => "strip_offset",
-        0x117 => "strip_byte_count",
-        0xc640 => "strip_cr2_slice",
-        _ => "???"
-    };
-    let valsize: usize = match tagtype {
-        1|2|6|7 => 1,
-        3|8 => 2,
-        4|9|11 => 4,
-        5|10|12 => 8,
-        _ => 0
-    };
-    if valsize*valcount > 4
-    {   
-        let offset = tag[8..12].to::<u32>().unwrap();
-        let mut f = try!(File::open(self.file_name.deref()));
-        try!(f.seek(io::SeekFrom::Start(offset as u64)));
-        data = vec![0u8; (valsize * valcount) as usize];
-        try!(f.read(&mut data));
+        self.raw_offset = head[12..16].to::<u32>().unwrap() as usize;
+        Ok(())
     }
+
+    fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
+        let mut tag = [0u8; 12];
+        try!(f.read(&mut tag));
+        let tagid = tag[0..2].to::<u16>().unwrap();
+        let tagtype = tag[2..4].to::<u16>().unwrap();
+        let valcount = tag[4..8].to::<u32>().unwrap() as usize; 
+        let mut data: Vec<u8> = From::from(&tag[8..12]);
+        let tagname = match tagid {
+            0x100 => "width",
+            0x101 => "height",
+            0x102 => "bits_per_sample",
+            0x103 => "compression",
+            0x10f => "make",
+            0x110 => "model",
+            0x111 => "strip_offset",
+            0x112 => "orientation",
+            0x117 => "strip_byte_count",
+            0x11a => "x_resolution",
+            0x11b => "y_resolution",
+            0x128 => "res_unit",
+            0x132 => "date_time",
+            0xc640 => "strip_cr2_slice",
+            _ => "???"
+        };
+        let valsize: usize = match tagtype {
+            1|2|6|7 => 1,
+            3|8 => 2,
+            4|9|11 => 4,
+            5|10|12 => 8,
+            _ => 0
+        };
+        if valsize*valcount > 4
+        {   
+            let offset = tag[8..12].to::<u32>().unwrap();
+            let mut f = try!(File::open(self.file_name.deref()));
+            try!(f.seek(io::SeekFrom::Start(offset as u64)));
+            data = vec![0u8; (valsize * valcount) as usize];
+            try!(f.read(&mut data));
+        }
         let mut d : Vec<TagData> = Vec::new();
         let mut s:  String = String::new(); 
         let mut i = 0;
@@ -192,12 +219,11 @@ fn read_tag(&mut self, f: &mut File) -> Result<(),RawFileError>{
                 11 => d.push(TagData::Float(w.to::<f32>().unwrap() as f64)),
                 12 => d.push(TagData::Float(w.to::<f64>().unwrap())),
                 _ => return Err(RawFileError::TypeError(tagtype))
-
             }    
-        
         }
-    Ok(())
-}
+        println!("name: {:20} id: {:0>4x}",tagname,tagid);
+        Ok(())
+    }
 
 fn read_ifd(&mut self,f: &mut File, index: usize,read_tags:bool) -> Result<usize,RawFileError>{
     let mut pos = try!(f.seek(io::SeekFrom::Start(self.ifd[index].offset as u64)));
